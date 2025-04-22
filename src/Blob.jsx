@@ -13,7 +13,7 @@ export default function Blob() {
   useEffect(() => {
     if (!hasGreeted) {
       const timer = setTimeout(() => {
-        speak("Bonjour, je suis Blob");
+        speak("Bonjour, je suis jarvis");
         setHasGreeted(true);
       }, 1000);
       
@@ -120,7 +120,7 @@ export default function Blob() {
             : 'bg-purple-600 hover:bg-purple-700 text-white'
         }`}
       >
-        {isListening ? '🛑 Arrêter' : '🎤 Parler à Blob'}
+        {isListening ? '🛑 Arrêter' : '🎤 Parler à jarvis'}
       </button>
     </div>
   );
