@@ -1,0 +1,58 @@
+body {
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background: #fff;
+  }
+
+  .circle {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    overflow: hidden;
+    position: relative;
+    border: 2px solid white;
+    transition: all 0.5s ease;
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position: center
+  }
+
+
+.circle.active {
+  animation: doubleBass 1.2s infinite ease-in-out;
+}
+
+
+
+  .moving-bg {
+    width: 400px;
+    height: 400px;
+    background-image: url('wave.gif'); /* le gif sert de background pour le cercle */
+    background-size: cover;
+    background-repeat: no-repeat;
+    position: absolute;
+    animation: floatAround 4s ease-in-out infinite alternate;
+  }
+
+  @keyframes floatAround {
+    0%   { transform: translate(0px, 0px); }
+    25%  { transform: translate(-30px, -10px); }
+    50%  { transform: translate(-60px, -10px); }
+    75%  { transform: translate(-30px, -30px); }
+    100% { transform: translate(0px, -10px); }
+  }
+
+
+ 
+  
+
+@keyframes doubleBass {
+  0%   { transform: scale(1.05); }
+25%  { transform: scale(1.1); }
+50%  { transform: scale(1.05); }
+75%  { transform: scale(1.1); }
+100% { transform: scale(1.05); }
+}
