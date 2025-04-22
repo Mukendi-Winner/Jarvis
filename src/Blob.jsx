@@ -1,55 +1,127 @@
-import React from "react";
-import { motion } from "framer-motion";
-import useSpeech from "./hook/useSpeech";
-import { useEffect } from "react";
-export default function Blob() {
+import React, { useEffect, useState } from 'react';
+import { motion } from 'framer-motion';
+import useSpeech from './hook/useSpeech';
+import useSpeechRecognition from './hook/useSpeechRecognition';
 
-  const speak = useSpeech("Bonjour, je suis ton assistant Blob !");
+export default function Blob() {
+  // Configuration vocale
+  const { transcript, isListening, startListening, stopListening } = useSpeechRecognition();
+  const { speak } = useSpeech();
+  const [hasGreeted, setHasGreeted] = useState(false);
+
+  // Message d'accueil UNE SEULE FOIS
   useEffect(() => {
-    speak();
+    if (!hasGreeted) {
+      const timer = setTimeout(() => {
+        speak("Bonjour, je suis Blob");
+        setHasGreeted(true);
+      }, 1000);
+      
+      return () => clearTimeout(timer);
+    }
+  }, [speak, hasGreeted]);
+
+  // Réponses aux commandes (seulement quand on lui parle)
+  useEffect(() => {
+    if (!transcript || !hasGreeted) return;
+
+    const command = transcript.toLowerCase();
+    
+    if (command.includes('bonjour')) {
+      speak("Bonjour à vous !");
+    } else if (command.includes('comment ça va')) {
+      speak("Je vais bien, merci !");
+    } else if (command.includes('stop')) {
+      stopListening();
+    }
+  }, [transcript, speak, stopListening, hasGreeted]);
+
+  // Génération des formes aléatoires (identique à avant)
+  const generateBlobPath = () => {
+    const center = { x: 300, y: 300 };
+    const radius = 150;
+    const points = 12;
+    let path = '';
+
+    for (let i = 0; i <= points; i++) {
+      const angle = (i / points) * Math.PI * 2;
+      const variation = radius * (0.92 + Math.random() * 0.16);
+      const x = center.x + Math.cos(angle) * variation;
+      const y = center.y + Math.sin(angle) * variation;
+
+      if (i === 0) path += `M${x},${y}`;
+      else path += `L${x},${y}`;
+    }
+
+    return path + 'Z';
+  };
+
+  // Animation des formes (identique)
+  const [paths, setPaths] = useState([]);
+  useEffect(() => {
+    const initialPaths = Array.from({ length: 4 }, generateBlobPath);
+    setPaths(initialPaths);
+
+    const interval = setInterval(() => {
+      setPaths(prev => {
+        const newPaths = [...prev];
+        const randomIndex = Math.floor(Math.random() * 4);
+        newPaths[randomIndex] = generateBlobPath();
+        return newPaths;
+      });
+    }, 3000);
+
+    return () => clearInterval(interval);
   }, []);
 
-  const blobPaths = [
-    "M450,300Q490,450,300,450Q110,450,150,300Q190,150,300,150Q410,150,450,300Z",
-    "M440,310Q460,460,300,440Q140,420,170,300Q200,180,300,170Q400,160,440,310Z",
-    "M460,290Q490,440,310,460Q130,480,140,300Q150,120,300,140Q450,160,460,290Z",
-    "M430,320Q420,470,300,430Q180,390,200,300Q220,210,300,190Q380,170,430,320Z"
-  ];
-
   return (
-<div className="fixed inset-0 flex items-center justify-center pointer-events-none z-10">
-<div className="w-[140vmin] h-[140vmin] flex items-center justify-center">
+    <div className="fixed inset-0 flex items-center justify-center bg-black">
+      {/* Blob géant avec animations */}
+      <div className="w-[140vmin] h-[140vmin] relative">
         <motion.svg
           viewBox="0 0 600 600"
-          preserveAspectRatio="xMidYMid meet"
-          className="w-full h-full"
+          className="absolute w-full h-full"
         >
           <defs>
-            <radialGradient id="blobGradient" cx="45%" cy="45%" r="50%">
-              <stop offset="0%" stopColor="#6d28d9" />
-              <stop offset="50%" stopColor="#4338ca" />
-              <stop offset="100%" stopColor="#1e1b4b" />
+            <radialGradient id="blobGradient" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#7C3AED" />
+              <stop offset="60%" stopColor="#5B21B6" />
+              <stop offset="100%" stopColor="#1E1B4B" />
             </radialGradient>
             <filter id="goo">
-              <feGaussianBlur in="SourceGraphic" stdDeviation="15" />
-              <feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 20 -8" />
+              <feGaussianBlur in="SourceGraphic" stdDeviation="12" />
+              <feColorMatrix values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 18 -7" />
             </filter>
           </defs>
 
-          <motion.path
-            fill="url(#blobGradient)"
-            filter="url(#goo)"
-            initial={{ d: blobPaths[0] }}
-            animate={{ d: blobPaths }}
-            transition={{
-              duration: 18,
-              ease: [0.6, 0.05, 0.4, 0.99],
-              repeat: Infinity,
-              repeatType: "reverse"
-            }}
-          />
+          {paths.length > 0 && (
+            <motion.path
+              fill="url(#blobGradient)"
+              filter="url(#goo)"
+              initial={{ d: paths[0] }}
+              animate={{ d: paths }}
+              transition={{
+                duration: 6,
+                ease: "easeInOut",
+                repeat: Infinity,
+                repeatType: "mirror"
+              }}
+            />
+          )}
         </motion.svg>
       </div>
+
+      {/* Bouton de contrôle vocal */}
+      <button
+        onClick={isListening ? stopListening : startListening}
+        className={`fixed bottom-10 z-50 px-6 py-3 rounded-full text-lg font-bold shadow-lg transition-all ${
+          isListening 
+            ? 'bg-red-500 hover:bg-red-600 text-white' 
+            : 'bg-purple-600 hover:bg-purple-700 text-white'
+        }`}
+      >
+        {isListening ? '🛑 Arrêter' : '🎤 Parler à Blob'}
+      </button>
     </div>
   );
 }

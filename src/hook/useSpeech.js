@@ -1,36 +1,52 @@
-const useSpeech = (text) => {
-    const speak = () => {
-      // Vérifie si l'API est disponible
-      if (!window.speechSynthesis) {
-        console.warn("Speech Synthesis API not supported");
-        return;
-      }
-  
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "fr-FR";
-      utterance.rate = 0.9; // Vitesse légèrement réduite
-  
-      // Attendre que les voix soient chargées
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        const frenchVoice = voices.find(voice => voice.lang === "fr-FR" || voice.lang === "fr");
-        if (frenchVoice) {
-          utterance.voice = frenchVoice;
-        }
-        window.speechSynthesis.speak(utterance);
-      } else {
-        window.speechSynthesis.onvoiceschanged = () => {
-          const voices = window.speechSynthesis.getVoices();
-          const frenchVoice = voices.find(voice => voice.lang === "fr-FR" || voice.lang === "fr");
-          if (frenchVoice) {
-            utterance.voice = frenchVoice;
-          }
-          window.speechSynthesis.speak(utterance);
-        };
-      }
+// src/hooks/useSpeech.js
+import { useState, useEffect } from 'react';
+
+const useSpeech = () => {
+  const [voices, setVoices] = useState([]);
+
+  // Charge les voix disponibles
+  useEffect(() => {
+    const updateVoices = () => {
+      setVoices(window.speechSynthesis.getVoices());
     };
-  
-    return speak;
+
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+
+    return () => {
+      window.speechSynthesis.onvoiceschanged = null;
+    };
+  }, []);
+
+  const speak = (text) => {
+    // Vérifie que l'API est disponible et qu'il y a des voix chargées
+    if (!window.speechSynthesis || voices.length === 0) {
+      console.warn('Synthèse vocale non disponible');
+      return;
+    }
+
+    // Crée une nouvelle instance à chaque fois
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'fr-FR';
+    utterance.rate = 1.0;
+
+    // Trouve une voix française
+    const frenchVoice = voices.find(voice => 
+      voice.lang.includes('fr') || voice.lang.includes('FR')
+    );
+
+    if (frenchVoice) {
+      utterance.voice = frenchVoice;
+    }
+
+    // Annule toute élocution en cours
+    window.speechSynthesis.cancel();
+    
+    // Parle
+    window.speechSynthesis.speak(utterance);
   };
+
+  return { speak };
+};
 
 export default useSpeech;
