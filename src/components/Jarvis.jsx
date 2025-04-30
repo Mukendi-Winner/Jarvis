@@ -1,40 +1,55 @@
 import { useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
 
-function Welcome() {
-  const fullText = "Bonjour ariel, je suis ton assistant vocal";
+function Jarvis() {
+  const { assistantType } = useParams();
+  const [fullText, setFullText] = useState("");
   const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const assistantTexts = {
+      coach: "Coach, comment je dois\ngerer mon alimentation\npour perdre du poids",
+      psychologue: "Psychologue, j'ai besoin\nde parler de mon stress\net de mon anxiété",
+      pote: "Hey mon pote, ça fait\nlongtemps qu'on s'est pas vus\nTu veux qu'on sorte ce soir?",
+      traducteur: "Traducteur, j'ai besoin\nd'aide pour comprendre\ncet article en anglais",
+      medecin: "Docteur, je ressens\nune douleur étrange\ndans le bas du dos",
+      prof: "Professeur, je n'arrive pas\nà comprendre ce théorème\npouvez-vous m'expliquer?"
+    };
+
+    setFullText(assistantTexts[assistantType] || "Bonjour, comment puis-je vous aider?");
+    setIndex(0);
+  }, [assistantType]);
 
   useEffect(() => {
     if (index < fullText.length) {
       const timeout = setTimeout(() => {
         setIndex(index + 1);
-      }, 100);
+      }, 50);
       return () => clearTimeout(timeout);
     }
-  }, [index]);
+  }, [index, fullText.length]);
 
   const displayedText = fullText.substring(0, index);
-   
+  
   return (
     <div 
-      className="h-screen flex flex-col justify-start pt-16 md:pt-24 items-center text-white px-4 overflow-hidden"
+      className="h-screen flex flex-col justify-start pt-16 items-center text-white px-6 overflow-hidden"
       style={{
         background: 'linear-gradient(31deg, rgba(4, 12, 17, 1) 6%, rgba(10, 5, 48, 1) 15%, rgba(12, 62, 4, 1) 100%, rgba(28, 28, 28, 1) 78%, rgba(6, 6, 36, 1) 48%, rgba(4, 28, 7, 1) 90%, rgba(12, 12, 60, 1) 38%, rgba(16, 64, 44, 1) 82%)',
         boxShadow: 'inset 0 0 50px rgba(0,0,0,0.7)'
       }}
     >
-      {/* Texte avec animation de frappe */}
-      <h1 className="text-2xl md:text-4xl font-bold text-center mb-32 sm:mb-32 md:mb-24 min-h-[4rem] md:min-h-[6rem] leading-tight tracking-wide">
+      <h2 className="text-2xl font-light mb-8 self-start">Good evening</h2>
+      
+      <div className="text-3xl font-medium text-center mb-12 min-h-[8rem] leading-relaxed whitespace-pre-line">
         {displayedText}
         <span className="animate-pulse">|</span>
-      </h1>
+      </div>
 
-      {/* Cercle avec animation vidéo - Version sans bordure noire */}
+      {/* Partie vidéo corrigée - identique à Welcome */}
       <div className="mb-24 sm:mb-32 md:mb-24">
         <div className="relative w-32 h-32 md:w-40 md:h-40">
-          {/* Gradient externe animé */}
           <div className="absolute inset-0 rounded-full bg-gradient-to-tr from-[#005F73] to-[#0A9396] p-0.5 animate-pulse overflow-hidden">
-            {/* Conteneur vidéo qui remplit tout l'espace */}
             <div className="absolute inset-0 rounded-full overflow-hidden">
               <video 
                 autoPlay 
@@ -49,13 +64,8 @@ function Welcome() {
           </div>
         </div>
       </div>
-
-      {/* Bouton Get Started */}
-      <a className="mt-24 sm:mt-32 md:mt-20 border border-[#0A9396] text-[#0A9396] rounded-full px-8 py-2 md:px-10 md:py-2.5 text-lg hover:bg-[#0A9396] hover:text-black transition-colors" href="home">
-        Get started
-      </a >
     </div>
   );
 }
 
-export default Welcome;
+export default Jarvis;
