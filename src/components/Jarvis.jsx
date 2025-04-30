@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-
+const userName = localStorage.getItem('userName') || ''
 function Jarvis() {
   const { assistantType } = useParams();
   const [fullText, setFullText] = useState("");
@@ -39,7 +39,7 @@ function Jarvis() {
         boxShadow: 'inset 0 0 50px rgba(0,0,0,0.7)'
       }}
     >
-      <h2 className="text-2xl font-light mb-8 self-start">Good evening</h2>
+      <h2 className="text-2xl font-light mb-8 self-start">{userName}</h2>
       
       <div className="text-3xl font-medium text-center mb-12 min-h-[8rem] leading-relaxed whitespace-pre-line">
         {displayedText}

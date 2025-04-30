@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 function Welcome() {
-  const fullText = "Bonjour ariel, je suis ton assistant vocal";
+  const userName = localStorage.getItem('userName') || ''
+  const fullText = `Bonjour ${userName}, je suis ton assistant vocal`
   const [index, setIndex] = useState(0);
 
   useEffect(() => {

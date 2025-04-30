@@ -3,11 +3,12 @@ import ReactDOM from 'react-dom/client'
 import './index.css'
 import { createBrowserRouter, RouterProvider } from 'react-router-dom'
 import App from './App.jsx'
+import Login from './components/Login' 
 import Welcome from './components/Welcome'
-import Home from './components/Home.jsx' 
+import Home from './components/Home.jsx'
 import Jarvis from './components/Jarvis.jsx'
 import NotFound from './components/NotFound.jsx'
-//  routes
+
 const router = createBrowserRouter([
   {
     path: "/",
@@ -16,6 +17,10 @@ const router = createBrowserRouter([
     children: [
       {
         path: "/",
+        element: <Login />,
+      },
+      {
+        path: "/welcome",
         element: <Welcome />,
       },
       {
@@ -24,7 +29,7 @@ const router = createBrowserRouter([
       },
       {
         path: "/jarvis",
-        element: <Jarvis />, 
+        element: <Jarvis />,
       },
       {
         path: "/jarvis/:assistantType",
@@ -33,7 +38,6 @@ const router = createBrowserRouter([
     ],
   },
 ])
-
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
