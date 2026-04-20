@@ -12,7 +12,7 @@ function Welcome() {
       }, 100);
       return () => clearTimeout(timeout);
     }
-  }, [index, fullText.length]);
+  }, [index]);
 
   const displayedText = fullText.substring(0, index);
    
