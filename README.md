@@ -1,12 +1,42 @@
-# React + Vite
+# Jarvis
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Jarvis is a voice-first AI assistant with multiple conversation modes such as `pote`, `coach`, `psychologue`, `prof`, `medecin`, and `traducteur`.
 
-Currently, two official plugins are available:
+## Architecture
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+- `src/` contains the Vite + React frontend.
+- `Jarvis_Backend/` contains the Express + WebSocket backend.
+- The frontend records the user's voice and sends audio to the backend.
+- The backend sends that audio to Gemini for understanding and response generation.
+- The backend then sends the Gemini reply to Gemini TTS and returns spoken audio to the frontend.
+- The UI does not display the transcription or model text reply.
 
-## Expanding the ESLint configuration
+## Local setup
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+### Backend
+
+1. Create [`Jarvis_Backend/.env`](./Jarvis_Backend/.env) from [`Jarvis_Backend/.env.example`](./Jarvis_Backend/.env.example).
+2. Add your Gemini API key as `GEMINI_API_KEY`.
+3. Start the backend:
+
+```bash
+cd Jarvis_Backend
+npm start
+```
+
+### Frontend
+
+1. Start the frontend:
+
+```bash
+npm run dev
+```
+
+2. The frontend expects the backend WebSocket at `ws://localhost:3000` by default.
+3. For deployment, set `VITE_BACKEND_WS_URL` to your production WebSocket URL.
+
+## Notes
+
+- Conversation memory is kept in backend memory per session and trimmed to the last 20 messages.
+- `psychologue` and `medecin` modes include guardrails so Jarvis stays supportive without pretending to be a licensed professional.
+- The current implementation is optimized for a strong local demo and can later be upgraded to Gemini Live API for lower-latency streaming speech.
