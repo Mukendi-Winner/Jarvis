@@ -6,20 +6,93 @@ const WS_URL =
   `${window.location.protocol === "https:" ? "wss" : "ws"}://localhost:3000`;
 
 const SESSION_STORAGE_PREFIX = "jarvis-session";
+const INPUT_SAMPLE_RATE = 16000;
 
-function useRecorder({ assistantType, onMessage }) {
+function downsampleTo16k(inputData, inputSampleRate) {
+  if (inputSampleRate === INPUT_SAMPLE_RATE) {
+    return float32ToInt16(inputData);
+  }
+
+  const sampleRateRatio = inputSampleRate / INPUT_SAMPLE_RATE;
+  const newLength = Math.round(inputData.length / sampleRateRatio);
+  const result = new Int16Array(newLength);
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+    let accum = 0;
+    let count = 0;
+
+    for (let index = offsetBuffer; index < nextOffsetBuffer && index < inputData.length; index += 1) {
+      accum += inputData[index];
+      count += 1;
+    }
+
+    const sample = count > 0 ? accum / count : 0;
+    result[offsetResult] = clampToInt16(sample);
+    offsetResult += 1;
+    offsetBuffer = nextOffsetBuffer;
+  }
+
+  return result;
+}
+
+function float32ToInt16(float32Array) {
+  const result = new Int16Array(float32Array.length);
+
+  for (let index = 0; index < float32Array.length; index += 1) {
+    result[index] = clampToInt16(float32Array[index]);
+  }
+
+  return result;
+}
+
+function clampToInt16(sample) {
+  const clamped = Math.max(-1, Math.min(1, sample));
+  return clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff;
+}
+
+function pcmBase64ToFloat32(base64Audio) {
+  const byteCharacters = atob(base64Audio);
+  const byteArray = new Uint8Array(byteCharacters.length);
+
+  for (let index = 0; index < byteCharacters.length; index += 1) {
+    byteArray[index] = byteCharacters.charCodeAt(index);
+  }
+
+  const pcmView = new DataView(byteArray.buffer);
+  const float32 = new Float32Array(byteArray.byteLength / 2);
+
+  for (let index = 0; index < float32.length; index += 1) {
+    float32[index] = pcmView.getInt16(index * 2, true) / 0x8000;
+  }
+
+  return float32;
+}
+
+function getSampleRateFromMimeType(mimeType) {
+  const match = mimeType?.match(/rate=(\d+)/);
+  return match ? Number(match[1]) : 24000;
+}
+
+function useLiveVoice({ assistantType, onMessage }) {
+  const [isConnected, setIsConnected] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [status, setStatus] = useState("connecting");
-  const [isConnected, setIsConnected] = useState(false);
-  const mediaRecorderRef = useRef(null);
-  const streamRef = useRef(null);
   const wsRef = useRef(null);
   const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 5;
   const currentAssistantRef = useRef(assistantType);
   const onMessageRef = useRef(onMessage);
-  const pendingStopRef = useRef(null);
-  const stopFallbackTimeoutRef = useRef(null);
+  const captureStreamRef = useRef(null);
+  const captureContextRef = useRef(null);
+  const captureProcessorRef = useRef(null);
+  const captureAnalyserRef = useRef(null);
+  const captureSourceRef = useRef(null);
+  const captureSilenceRef = useRef(null);
+  const playbackContextRef = useRef(null);
+  const playbackCursorRef = useRef(0);
+  const queuedPlaybackRef = useRef(0);
 
   useEffect(() => {
     currentAssistantRef.current = assistantType;
@@ -37,21 +110,11 @@ function useRecorder({ assistantType, onMessage }) {
         return;
       }
 
-      if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-        setStatus("error");
-        setIsConnected(false);
-        onMessageRef.current({
-          type: "error",
-          error: "Connexion au serveur impossible. Verifiez le backend."
-        });
-        return;
-      }
-
       const socket = new WebSocket(WS_URL);
+      socket.binaryType = "arraybuffer";
       wsRef.current = socket;
 
       socket.onopen = () => {
-        console.log("[Jarvis] WebSocket connected");
         reconnectAttemptsRef.current = 0;
         setIsConnected(true);
         setStatus("idle");
@@ -63,15 +126,13 @@ function useRecorder({ assistantType, onMessage }) {
           JSON.stringify({
             type: "session:init",
             sessionId: existingSessionId,
-            assistantType: currentAssistantRef.current,
-            mimeType: "audio/webm"
+            assistantType: currentAssistantRef.current
           })
         );
       };
 
       socket.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        console.log("[Jarvis] WebSocket message:", data);
 
         if (data.type === "session:ready" && data.sessionId) {
           localStorage.setItem(
@@ -88,19 +149,18 @@ function useRecorder({ assistantType, onMessage }) {
       };
 
       socket.onerror = () => {
-        console.error("[Jarvis] WebSocket error");
         setIsConnected(false);
       };
 
       socket.onclose = () => {
-        console.warn("[Jarvis] WebSocket closed");
         setIsConnected(false);
         if (cancelled) {
           return;
         }
+
         reconnectAttemptsRef.current += 1;
         setStatus("connecting");
-        setTimeout(connect, 1500 * reconnectAttemptsRef.current);
+        setTimeout(connect, Math.min(1000 * reconnectAttemptsRef.current, 5000));
       };
     };
 
@@ -108,112 +168,146 @@ function useRecorder({ assistantType, onMessage }) {
 
     return () => {
       cancelled = true;
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
+      wsRef.current?.close();
     };
   }, []);
 
+  const ensurePlaybackContext = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    if (!playbackContextRef.current) {
+      playbackContextRef.current = new AudioContextClass();
+    }
+
+    if (playbackContextRef.current.state === "suspended") {
+      await playbackContextRef.current.resume();
+    }
+
+    if (playbackCursorRef.current < playbackContextRef.current.currentTime) {
+      playbackCursorRef.current = playbackContextRef.current.currentTime;
+    }
+
+    return playbackContextRef.current;
+  };
+
+  const enqueueResponseAudio = async (base64Audio, mimeType) => {
+    const playbackContext = await ensurePlaybackContext();
+
+    if (!playbackContext) {
+      throw new Error("AudioContext non disponible.");
+    }
+
+    const sampleRate = getSampleRateFromMimeType(mimeType);
+    const samples = pcmBase64ToFloat32(base64Audio);
+    const audioBuffer = playbackContext.createBuffer(1, samples.length, sampleRate);
+    audioBuffer.getChannelData(0).set(samples);
+
+    const source = playbackContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(playbackContext.destination);
+
+    const startAt = Math.max(playbackContext.currentTime + 0.05, playbackCursorRef.current);
+    playbackCursorRef.current = startAt + audioBuffer.duration;
+    queuedPlaybackRef.current += 1;
+
+    source.onended = () => {
+      queuedPlaybackRef.current = Math.max(0, queuedPlaybackRef.current - 1);
+
+      if (queuedPlaybackRef.current === 0 && playbackContextRef.current) {
+        playbackCursorRef.current = playbackContextRef.current.currentTime;
+      }
+    };
+
+    source.start(startAt);
+  };
+
   const startRecording = async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : "audio/webm";
-
-    const recorder = new MediaRecorder(stream, { mimeType });
-    mediaRecorderRef.current = recorder;
-    pendingStopRef.current = null;
-    console.log("[Jarvis] Starting recorder with mime type:", mimeType);
-
-    recorder.ondataavailable = async (event) => {
-      console.log("[Jarvis] ondataavailable size:", event.data.size);
-      if (event.data.size === 0 || wsRef.current?.readyState !== WebSocket.OPEN) {
-        return;
-      }
-
-      const arrayBuffer = await event.data.arrayBuffer();
-      wsRef.current.send(new Uint8Array(arrayBuffer));
-      console.log("[Jarvis] Audio chunk sent:", arrayBuffer.byteLength, "bytes");
-
-      if (pendingStopRef.current) {
-        if (stopFallbackTimeoutRef.current) {
-          clearTimeout(stopFallbackTimeoutRef.current);
-          stopFallbackTimeoutRef.current = null;
-        }
-
-        wsRef.current.send(
-          JSON.stringify({
-            type: "recording_stopped",
-            assistantType: pendingStopRef.current.assistantType,
-            mimeType: pendingStopRef.current.mimeType
-          })
-        );
-        console.log("[Jarvis] recording_stopped sent after final chunk");
-        pendingStopRef.current = null;
-      }
-    };
-
-    recorder.onstop = () => {
-      console.log("[Jarvis] Recorder stopped");
-      stream.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-
-      if (pendingStopRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        stopFallbackTimeoutRef.current = window.setTimeout(() => {
-          if (!pendingStopRef.current || wsRef.current?.readyState !== WebSocket.OPEN) {
-            return;
-          }
-
-          wsRef.current.send(
-            JSON.stringify({
-              type: "recording_stopped",
-              assistantType: pendingStopRef.current.assistantType,
-              mimeType: pendingStopRef.current.mimeType
-            })
-          );
-          console.log("[Jarvis] recording_stopped sent by fallback");
-          pendingStopRef.current = null;
-          stopFallbackTimeoutRef.current = null;
-        }, 150);
-      }
-    };
-
     if (wsRef.current?.readyState !== WebSocket.OPEN) {
       throw new Error("La connexion WebSocket n'est pas prete.");
     }
 
+    await ensurePlaybackContext();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true
+      }
+    });
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    const captureContext = new AudioContextClass();
+    const source = captureContext.createMediaStreamSource(stream);
+    const analyser = captureContext.createAnalyser();
+    analyser.fftSize = 64;
+
+    const processor = captureContext.createScriptProcessor(4096, 1, 1);
+    const silenceGain = captureContext.createGain();
+    silenceGain.gain.value = 0;
+
+    processor.onaudioprocess = (event) => {
+      if (wsRef.current?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      const inputData = event.inputBuffer.getChannelData(0);
+      const pcm16 = downsampleTo16k(inputData, captureContext.sampleRate);
+      wsRef.current.send(pcm16.buffer);
+    };
+
+    source.connect(analyser);
+    analyser.connect(processor);
+    processor.connect(silenceGain);
+    silenceGain.connect(captureContext.destination);
+
+    captureStreamRef.current = stream;
+    captureContextRef.current = captureContext;
+    captureSourceRef.current = source;
+    captureAnalyserRef.current = analyser;
+    captureProcessorRef.current = processor;
+    captureSilenceRef.current = silenceGain;
+
     wsRef.current.send(
       JSON.stringify({
         type: "recording_started",
-        assistantType: currentAssistantRef.current,
-        mimeType
+        assistantType: currentAssistantRef.current
       })
     );
-    console.log("[Jarvis] recording_started sent");
 
-    recorder.start(250);
     setIsRecording(true);
   };
 
-  const stopRecording = () => {
-    if (!mediaRecorderRef.current) {
-      return;
+  const stopRecording = async () => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "recording_stopped",
+          assistantType: currentAssistantRef.current
+        })
+      );
     }
 
-    pendingStopRef.current = {
-      assistantType: currentAssistantRef.current,
-      mimeType: mediaRecorderRef.current.mimeType || "audio/webm"
-    };
-    console.log("[Jarvis] stop requested");
+    captureProcessorRef.current?.disconnect();
+    captureSilenceRef.current?.disconnect();
+    captureSourceRef.current?.disconnect();
+    captureStreamRef.current?.getTracks().forEach((track) => track.stop());
 
-    if (mediaRecorderRef.current.state === "recording") {
-      mediaRecorderRef.current.requestData();
+    if (captureContextRef.current && captureContextRef.current.state !== "closed") {
+      await captureContextRef.current.close();
     }
 
-    mediaRecorderRef.current.stop();
-    mediaRecorderRef.current = null;
+    captureStreamRef.current = null;
+    captureContextRef.current = null;
+    captureSourceRef.current = null;
+    captureAnalyserRef.current = null;
+    captureProcessorRef.current = null;
+    captureSilenceRef.current = null;
+
     setIsRecording(false);
   };
 
@@ -225,13 +319,18 @@ function useRecorder({ assistantType, onMessage }) {
 
   useEffect(() => {
     return () => {
-      if (stopFallbackTimeoutRef.current) {
-        clearTimeout(stopFallbackTimeoutRef.current);
+      captureProcessorRef.current?.disconnect();
+      captureSilenceRef.current?.disconnect();
+      captureSourceRef.current?.disconnect();
+      captureStreamRef.current?.getTracks().forEach((track) => track.stop());
+
+      if (captureContextRef.current && captureContextRef.current.state !== "closed") {
+        captureContextRef.current.close();
       }
-      if (mediaRecorderRef.current?.state !== "inactive") {
-        mediaRecorderRef.current?.stop();
+
+      if (playbackContextRef.current && playbackContextRef.current.state !== "closed") {
+        playbackContextRef.current.close();
       }
-      streamRef.current?.getTracks().forEach((track) => track.stop());
     };
   }, []);
 
@@ -239,8 +338,10 @@ function useRecorder({ assistantType, onMessage }) {
     isConnected,
     isRecording,
     status,
+    analyserRef: captureAnalyserRef,
     startRecording,
     stopRecording,
+    enqueueResponseAudio,
     resetConversation
   };
 }
@@ -254,41 +355,50 @@ function Jarvis() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [serverStatus, setServerStatus] = useState("connecting");
   const animationRef = useRef(null);
-  const analyserRef = useRef(null);
-  const meterContextRef = useRef(null);
-  const meterStreamRef = useRef(null);
-  const playbackAudioRef = useRef(null);
-  const playbackUrlRef = useRef(null);
-  const playbackContextRef = useRef(null);
-  const playbackSourceRef = useRef(null);
 
   const userName = localStorage.getItem("userName") || "";
 
-  const handleMessage = (data) => {
+  const handleMessage = async (data) => {
     if (data.type === "status") {
       setServerStatus(data.status);
-      if (data.status === "idle") {
-        setAudioError(null);
+      if (data.status !== "speaking") {
+        setIsPlaying(false);
       }
       return;
     }
 
-    if (data.type === "response_audio" && data.audio) {
-      playResponseAudio(data.audio, data.mimeType || "audio/wav");
+    if (data.type === "response_audio_chunk" && data.audio) {
+      try {
+        setAudioError(null);
+        setIsPlaying(true);
+        await enqueueResponseAudio(data.audio, data.mimeType || "audio/pcm;rate=24000");
+      } catch {
+        setIsPlaying(false);
+        setAudioError("Lecture audio impossible.");
+      }
       return;
     }
 
     if (data.type === "error") {
       setAudioError(data.error || "Une erreur est survenue.");
       setServerStatus("idle");
+      setIsPlaying(false);
     }
   };
 
-  const { isRecording, status, isConnected, startRecording, stopRecording, resetConversation } =
-    useRecorder({
-      assistantType,
-      onMessage: handleMessage
-    });
+  const {
+    isRecording,
+    status,
+    isConnected,
+    analyserRef,
+    startRecording,
+    stopRecording,
+    enqueueResponseAudio,
+    resetConversation
+  } = useLiveVoice({
+    assistantType,
+    onMessage: handleMessage
+  });
 
   useEffect(() => {
     setServerStatus(status);
@@ -320,159 +430,33 @@ function Jarvis() {
     return () => clearTimeout(timeout);
   }, [index, fullText]);
 
-  const stopMeter = async () => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    }
+  useEffect(() => {
+    const updateScale = () => {
+      const analyser = analyserRef.current;
 
-    meterStreamRef.current?.getTracks().forEach((track) => track.stop());
-    meterStreamRef.current = null;
+      if (!analyser) {
+        setScale(1);
+        animationRef.current = requestAnimationFrame(updateScale);
+        return;
+      }
 
-    if (meterContextRef.current) {
-      await meterContextRef.current.close();
-      meterContextRef.current = null;
-    }
-
-    analyserRef.current = null;
-    setScale(1);
-  };
-
-  const startMeter = async () => {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 64;
-
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const source = audioContext.createMediaStreamSource(stream);
-
-    source.connect(analyser);
-
-    meterContextRef.current = audioContext;
-    analyserRef.current = analyser;
-    meterStreamRef.current = stream;
-
-    const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-    const animate = () => {
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
       analyser.getByteFrequencyData(dataArray);
       const volume = Math.max(...dataArray) / 255;
       setScale(1 + volume * 0.8);
-      animationRef.current = requestAnimationFrame(animate);
+      animationRef.current = requestAnimationFrame(updateScale);
     };
 
-    animate();
-  };
+    animationRef.current = requestAnimationFrame(updateScale);
 
-  const ensurePlaybackContext = async () => {
-    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
-
-    if (!AudioContextClass) {
-      return null;
-    }
-
-    if (!playbackContextRef.current) {
-      playbackContextRef.current = new AudioContextClass();
-    }
-
-    if (playbackContextRef.current.state === "suspended") {
-      await playbackContextRef.current.resume();
-    }
-
-    return playbackContextRef.current;
-  };
-
-  const playResponseAudio = async (base64Audio, mimeType) => {
-    console.log("[Jarvis] Attempting response playback with mime type:", mimeType);
-
-    if (playbackSourceRef.current) {
-      playbackSourceRef.current.stop();
-      playbackSourceRef.current = null;
-    }
-
-    if (playbackAudioRef.current) {
-      playbackAudioRef.current.pause();
-      playbackAudioRef.current = null;
-    }
-
-    if (playbackUrlRef.current) {
-      URL.revokeObjectURL(playbackUrlRef.current);
-      playbackUrlRef.current = null;
-    }
-
-    const byteCharacters = atob(base64Audio);
-    const byteArray = new Uint8Array(byteCharacters.length);
-
-    for (let i = 0; i < byteCharacters.length; i += 1) {
-      byteArray[i] = byteCharacters.charCodeAt(i);
-    }
-
-    try {
-      const playbackContext = await ensurePlaybackContext();
-
-      if (playbackContext) {
-        const decodedBuffer = await playbackContext.decodeAudioData(byteArray.buffer.slice(0));
-        const source = playbackContext.createBufferSource();
-        source.buffer = decodedBuffer;
-        source.connect(playbackContext.destination);
-        source.onended = () => {
-          setIsPlaying(false);
-          setServerStatus("idle");
-          if (playbackSourceRef.current === source) {
-            playbackSourceRef.current = null;
-          }
-        };
-
-        playbackSourceRef.current = source;
-        setIsPlaying(true);
-        source.start(0);
-        console.log("[Jarvis] Playback started through AudioContext");
-        return;
-      }
-    } catch (error) {
-      console.warn("[Jarvis] AudioContext playback failed, falling back to HTMLAudio:", error);
-    }
-
-    const blob = new Blob([byteArray], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const audio = new Audio(url);
-
-    playbackUrlRef.current = url;
-    playbackAudioRef.current = audio;
-
-    audio.onplay = () => setIsPlaying(true);
-    audio.onended = () => {
-      setIsPlaying(false);
-      setServerStatus("idle");
-      URL.revokeObjectURL(url);
-      if (playbackUrlRef.current === url) {
-        playbackUrlRef.current = null;
+    return () => {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
       }
     };
-    audio.onerror = () => {
-      console.error("[Jarvis] HTMLAudio playback failed");
-      setIsPlaying(false);
-      setAudioError("Lecture audio impossible sur cet appareil.");
-    };
-
-    try {
-      await audio.play();
-      console.log("[Jarvis] Playback started through HTMLAudio fallback");
-    } catch (error) {
-      console.error("[Jarvis] HTMLAudio play() rejected:", error);
-      setAudioError("La lecture audio est bloquee sur ce telephone.");
-      setIsPlaying(false);
-      setServerStatus("idle");
-    }
-  };
+  }, [analyserRef]);
 
   const toggleRecording = async () => {
-    if (isRecording) {
-      stopRecording();
-      await stopMeter();
-      return;
-    }
-
     try {
       setAudioError(null);
 
@@ -481,55 +465,32 @@ function Jarvis() {
         return;
       }
 
-      if (playbackAudioRef.current) {
-        playbackAudioRef.current.pause();
-        playbackAudioRef.current.currentTime = 0;
-        setIsPlaying(false);
+      if (isRecording) {
+        await stopRecording();
+        return;
       }
 
-      await ensurePlaybackContext();
       await startRecording();
-      await startMeter();
     } catch {
-      setAudioError("Impossible de lancer le micro. Verifiez les permissions.");
-      await stopMeter();
+      setAudioError("Impossible d'utiliser le micro ou l'audio en direct.");
     }
   };
 
-  useEffect(() => {
-    return () => {
-      stopMeter();
-      if (playbackSourceRef.current) {
-        playbackSourceRef.current.stop();
-      }
-      if (playbackAudioRef.current) {
-        playbackAudioRef.current.pause();
-      }
-      if (playbackUrlRef.current) {
-        URL.revokeObjectURL(playbackUrlRef.current);
-      }
-      if (playbackContextRef.current && playbackContextRef.current.state !== "closed") {
-        playbackContextRef.current.close();
-      }
-    };
-  }, []);
-
   const isBusy = isRecording || serverStatus === "processing" || serverStatus === "speaking";
 
-  const buttonLabel = (() => {
-    if (isRecording) {
-      return "Appuyez pour arreter";
-    }
+  const buttonLabel = isRecording ? "Arreter" : "Parler a Jarvis";
+
+  const liveStatusLabel = (() => {
     if (!isConnected) {
-      return "Connexion au serveur...";
+      return "Connexion en cours...";
     }
-    if (serverStatus === "processing") {
-      return "Jarvis reflechit...";
+    if (isRecording) {
+      return "Jarvis vous ecoute";
     }
-    if (serverStatus === "speaking") {
-      return "Jarvis vous repond...";
+    if (serverStatus === "processing" || serverStatus === "speaking" || isPlaying) {
+      return "Conversation en cours";
     }
-    return "Parler a Jarvis";
+    return null;
   })();
 
   return (
@@ -592,6 +553,12 @@ function Jarvis() {
         )}
       </button>
 
+      {liveStatusLabel && (
+        <div className="mt-4 text-sm tracking-[0.18em] uppercase text-white/65 text-center">
+          {liveStatusLabel}
+        </div>
+      )}
+
       <button
         onClick={resetConversation}
         disabled={!isConnected || isBusy}
@@ -599,8 +566,6 @@ function Jarvis() {
       >
         Reinitialiser la conversation
       </button>
-
-      {isPlaying && <div className="mt-4 text-green-400 text-center">Lecture de la reponse...</div>}
 
       {audioError && <div className="mt-4 text-red-400 text-center">{audioError}</div>}
     </div>
