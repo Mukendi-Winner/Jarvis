@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 
 function Welcome() {
   const userName = localStorage.getItem('userName') || ''
@@ -52,9 +53,9 @@ function Welcome() {
       </div>
 
       {/* Bouton Get Started */}
-      <a className="mt-24 sm:mt-32 md:mt-20 border border-[#0A9396] text-[#0A9396] rounded-full px-8 py-2 md:px-10 md:py-2.5 text-lg hover:bg-[#0A9396] hover:text-black transition-colors" href="home">
+      <Link className="mt-24 sm:mt-32 md:mt-20 border border-[#0A9396] text-[#0A9396] rounded-full px-8 py-2 md:px-10 md:py-2.5 text-lg hover:bg-[#0A9396] hover:text-black transition-colors" to="/home">
         Get started
-      </a >
+      </Link>
     </div>
   );
 }
