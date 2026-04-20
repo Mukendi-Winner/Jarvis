@@ -259,6 +259,8 @@ function Jarvis() {
   const meterStreamRef = useRef(null);
   const playbackAudioRef = useRef(null);
   const playbackUrlRef = useRef(null);
+  const playbackContextRef = useRef(null);
+  const playbackSourceRef = useRef(null);
 
   const userName = localStorage.getItem("userName") || "";
 
@@ -362,7 +364,32 @@ function Jarvis() {
     animate();
   };
 
+  const ensurePlaybackContext = async () => {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+
+    if (!AudioContextClass) {
+      return null;
+    }
+
+    if (!playbackContextRef.current) {
+      playbackContextRef.current = new AudioContextClass();
+    }
+
+    if (playbackContextRef.current.state === "suspended") {
+      await playbackContextRef.current.resume();
+    }
+
+    return playbackContextRef.current;
+  };
+
   const playResponseAudio = async (base64Audio, mimeType) => {
+    console.log("[Jarvis] Attempting response playback with mime type:", mimeType);
+
+    if (playbackSourceRef.current) {
+      playbackSourceRef.current.stop();
+      playbackSourceRef.current = null;
+    }
+
     if (playbackAudioRef.current) {
       playbackAudioRef.current.pause();
       playbackAudioRef.current = null;
@@ -378,6 +405,32 @@ function Jarvis() {
 
     for (let i = 0; i < byteCharacters.length; i += 1) {
       byteArray[i] = byteCharacters.charCodeAt(i);
+    }
+
+    try {
+      const playbackContext = await ensurePlaybackContext();
+
+      if (playbackContext) {
+        const decodedBuffer = await playbackContext.decodeAudioData(byteArray.buffer.slice(0));
+        const source = playbackContext.createBufferSource();
+        source.buffer = decodedBuffer;
+        source.connect(playbackContext.destination);
+        source.onended = () => {
+          setIsPlaying(false);
+          setServerStatus("idle");
+          if (playbackSourceRef.current === source) {
+            playbackSourceRef.current = null;
+          }
+        };
+
+        playbackSourceRef.current = source;
+        setIsPlaying(true);
+        source.start(0);
+        console.log("[Jarvis] Playback started through AudioContext");
+        return;
+      }
+    } catch (error) {
+      console.warn("[Jarvis] AudioContext playback failed, falling back to HTMLAudio:", error);
     }
 
     const blob = new Blob([byteArray], { type: mimeType });
@@ -397,11 +450,20 @@ function Jarvis() {
       }
     };
     audio.onerror = () => {
+      console.error("[Jarvis] HTMLAudio playback failed");
       setIsPlaying(false);
-      setAudioError("Lecture audio impossible.");
+      setAudioError("Lecture audio impossible sur cet appareil.");
     };
 
-    await audio.play();
+    try {
+      await audio.play();
+      console.log("[Jarvis] Playback started through HTMLAudio fallback");
+    } catch (error) {
+      console.error("[Jarvis] HTMLAudio play() rejected:", error);
+      setAudioError("La lecture audio est bloquee sur ce telephone.");
+      setIsPlaying(false);
+      setServerStatus("idle");
+    }
   };
 
   const toggleRecording = async () => {
@@ -425,6 +487,7 @@ function Jarvis() {
         setIsPlaying(false);
       }
 
+      await ensurePlaybackContext();
       await startRecording();
       await startMeter();
     } catch {
@@ -436,11 +499,17 @@ function Jarvis() {
   useEffect(() => {
     return () => {
       stopMeter();
+      if (playbackSourceRef.current) {
+        playbackSourceRef.current.stop();
+      }
       if (playbackAudioRef.current) {
         playbackAudioRef.current.pause();
       }
       if (playbackUrlRef.current) {
         URL.revokeObjectURL(playbackUrlRef.current);
+      }
+      if (playbackContextRef.current && playbackContextRef.current.state !== "closed") {
+        playbackContextRef.current.close();
       }
     };
   }, []);
