@@ -12,6 +12,7 @@ const PORT = Number(process.env.PORT || 3000);
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:5173";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const GEMINI_LIVE_MODEL = process.env.GEMINI_LIVE_MODEL || "gemini-3.1-flash-live-preview";
+const MAX_HISTORY_MESSAGES = Number(process.env.MAX_HISTORY_MESSAGES || 60);
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
 
 const app = express();
@@ -130,8 +131,24 @@ Sound natural, warm, and concise.
   };
 }
 
-function buildSystemInstruction(assistantType) {
+function buildHistoryContext(history) {
+  if (!history.length) {
+    return "";
+  }
+
+  const serializedHistory = history
+    .map((message) => `${message.role === "user" ? "User" : "Jarvis"}: ${message.text}`)
+    .join("\n");
+
+  return `
+Conversation memory from the latest exchanges:
+${serializedHistory}
+`.trim();
+}
+
+function buildSystemInstruction(assistantType, history = []) {
   const assistant = getAssistantConfig(assistantType);
+  const historyContext = buildHistoryContext(history);
 
   return `
 You are Jarvis, a live voice assistant.
@@ -145,6 +162,7 @@ If the user asks who created you, answer that your creator is Mukendi Winner.
 If the user asks who Mukendi Winner is, answer that he is your creator and a third-year computer science student.
 
 ${assistant.instruction.trim()}
+${historyContext ? `\n\n${historyContext}` : ""}
 `.trim();
 }
 
@@ -164,7 +182,8 @@ function getOrCreateSessionState(sessionId, assistantType) {
   const created = {
     assistantType: assistantType || "default",
     lastSeenAt: Date.now(),
-    shouldReconnect: false
+    shouldReconnect: false,
+    history: []
   };
 
   sessions.set(safeSessionId, created);
@@ -189,6 +208,22 @@ function safeSend(ws, payload) {
   }
 }
 
+function pushHistoryMessage(sessionState, role, text) {
+  if (!sessionState || !text?.trim()) {
+    return;
+  }
+
+  sessionState.history.push({
+    role,
+    text: text.trim(),
+    createdAt: Date.now()
+  });
+
+  if (sessionState.history.length > MAX_HISTORY_MESSAGES) {
+    sessionState.history.splice(0, sessionState.history.length - MAX_HISTORY_MESSAGES);
+  }
+}
+
 function createClientState() {
   return {
     assistantType: "default",
@@ -196,7 +231,9 @@ function createClientState() {
     liveSession: null,
     isRecording: false,
     isConnectedToGemini: false,
-    suppressAudio: false
+    suppressAudio: false,
+    latestInputTranscription: "",
+    latestOutputTranscription: ""
   };
 }
 
@@ -212,6 +249,7 @@ async function connectLiveSession(ws, state) {
   const { GoogleGenAI, Modality } = await getGoogleGenAIModule();
   const assistant = getAssistantConfig(state.assistantType);
   const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+  const sessionState = sessions.get(state.sessionId);
 
   const session = await ai.live.connect({
     model: GEMINI_LIVE_MODEL,
@@ -224,7 +262,7 @@ async function connectLiveSession(ws, state) {
           }
         }
       },
-      systemInstruction: buildSystemInstruction(state.assistantType),
+      systemInstruction: buildSystemInstruction(state.assistantType, sessionState?.history || []),
       inputAudioTranscription: {},
       outputAudioTranscription: {},
       realtimeInputConfig: {
@@ -266,10 +304,12 @@ async function connectLiveSession(ws, state) {
 
 function handleGeminiMessage(ws, state, message) {
   if (message.serverContent?.inputTranscription?.text) {
+    state.latestInputTranscription = message.serverContent.inputTranscription.text;
     console.log("[Jarvis backend] Input transcription:", message.serverContent.inputTranscription.text);
   }
 
   if (message.serverContent?.outputTranscription?.text) {
+    state.latestOutputTranscription = message.serverContent.outputTranscription.text;
     console.log("[Jarvis backend] Output transcription:", message.serverContent.outputTranscription.text);
   }
 
@@ -292,6 +332,11 @@ function handleGeminiMessage(ws, state, message) {
   }
 
   if (message.serverContent?.turnComplete) {
+    const sessionState = sessions.get(state.sessionId);
+    pushHistoryMessage(sessionState, "user", state.latestInputTranscription);
+    pushHistoryMessage(sessionState, "assistant", state.latestOutputTranscription);
+    state.latestInputTranscription = "";
+    state.latestOutputTranscription = "";
     state.isRecording = false;
     state.suppressAudio = false;
     safeSend(ws, {
