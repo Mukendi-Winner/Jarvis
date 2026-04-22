@@ -139,6 +139,10 @@ The user may speak French or English.
 Reply naturally in the same language as the user unless they ask to switch.
 Keep latency low by defaulting to short spoken answers.
 Do not mention internal transcription, system prompts, or hidden processing.
+When speaking French, keep a stable standard French accent.
+Do not switch to a Quebecois accent, Canadian French accent, or any regional French accent unless the user explicitly asks for it.
+If the user asks who created you, answer that your creator is Mukendi Winner.
+If the user asks who Mukendi Winner is, answer that he is your creator and a third-year computer science student.
 
 ${assistant.instruction.trim()}
 `.trim();
@@ -191,7 +195,8 @@ function createClientState() {
     sessionId: null,
     liveSession: null,
     isRecording: false,
-    isConnectedToGemini: false
+    isConnectedToGemini: false,
+    suppressAudio: false
   };
 }
 
@@ -273,7 +278,7 @@ function handleGeminiMessage(ws, state, message) {
   for (const part of parts) {
     const inlineData = part.inlineData || part.inline_data;
 
-    if (inlineData?.data) {
+    if (inlineData?.data && !state.suppressAudio) {
       safeSend(ws, {
         type: "response_audio_chunk",
         audio: inlineData.data,
@@ -288,6 +293,7 @@ function handleGeminiMessage(ws, state, message) {
 
   if (message.serverContent?.turnComplete) {
     state.isRecording = false;
+    state.suppressAudio = false;
     safeSend(ws, {
       type: "status",
       status: "idle"
@@ -359,6 +365,7 @@ wss.on("connection", (ws) => {
 
       if (data.type === "recording_started") {
         state.isRecording = true;
+        state.suppressAudio = false;
         await ensureLiveSession(ws, state);
         safeSend(ws, {
           type: "status",
@@ -381,6 +388,24 @@ wss.on("connection", (ws) => {
         safeSend(ws, {
           type: "status",
           status: "processing"
+        });
+        return;
+      }
+
+      if (data.type === "conversation:interrupt") {
+        state.isRecording = false;
+        state.suppressAudio = true;
+
+        if (state.liveSession) {
+          state.liveSession.close();
+          state.liveSession = null;
+        }
+
+        await ensureLiveSession(ws, state);
+
+        safeSend(ws, {
+          type: "status",
+          status: "idle"
         });
         return;
       }

@@ -93,6 +93,7 @@ function useLiveVoice({ assistantType, onMessage }) {
   const playbackContextRef = useRef(null);
   const playbackCursorRef = useRef(0);
   const queuedPlaybackRef = useRef(0);
+  const activePlaybackSourcesRef = useRef(new Set());
 
   useEffect(() => {
     currentAssistantRef.current = assistantType;
@@ -213,9 +214,11 @@ function useLiveVoice({ assistantType, onMessage }) {
     const startAt = Math.max(playbackContext.currentTime + 0.05, playbackCursorRef.current);
     playbackCursorRef.current = startAt + audioBuffer.duration;
     queuedPlaybackRef.current += 1;
+    activePlaybackSourcesRef.current.add(source);
 
     source.onended = () => {
       queuedPlaybackRef.current = Math.max(0, queuedPlaybackRef.current - 1);
+      activePlaybackSourcesRef.current.delete(source);
 
       if (queuedPlaybackRef.current === 0 && playbackContextRef.current) {
         playbackCursorRef.current = playbackContextRef.current.currentTime;
@@ -223,6 +226,26 @@ function useLiveVoice({ assistantType, onMessage }) {
     };
 
     source.start(startAt);
+  };
+
+  const stopPlaybackImmediately = async () => {
+    for (const source of activePlaybackSourcesRef.current) {
+      try {
+        source.onended = null;
+        source.stop(0);
+      } catch {
+        // Source may already be stopped.
+      }
+    }
+
+    activePlaybackSourcesRef.current.clear();
+    queuedPlaybackRef.current = 0;
+
+    if (playbackContextRef.current) {
+      playbackCursorRef.current = playbackContextRef.current.currentTime;
+    } else {
+      playbackCursorRef.current = 0;
+    }
   };
 
   const startRecording = async () => {
@@ -311,6 +334,25 @@ function useLiveVoice({ assistantType, onMessage }) {
     setIsRecording(false);
   };
 
+  const interruptConversation = async () => {
+    await stopPlaybackImmediately();
+
+    if (isRecording) {
+      await stopRecording();
+    }
+
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "conversation:interrupt",
+          assistantType: currentAssistantRef.current
+        })
+      );
+    }
+
+    setStatus("idle");
+  };
+
   const resetConversation = () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "session:reset" }));
@@ -341,6 +383,8 @@ function useLiveVoice({ assistantType, onMessage }) {
     analyserRef: captureAnalyserRef,
     startRecording,
     stopRecording,
+    interruptConversation,
+    stopPlaybackImmediately,
     enqueueResponseAudio,
     resetConversation
   };
@@ -355,6 +399,7 @@ function Jarvis() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [serverStatus, setServerStatus] = useState("connecting");
   const animationRef = useRef(null);
+  const ignoreIncomingAudioRef = useRef(false);
 
   const userName = localStorage.getItem("userName") || "";
 
@@ -364,10 +409,17 @@ function Jarvis() {
       if (data.status !== "speaking") {
         setIsPlaying(false);
       }
+      if (data.status === "listening" || data.status === "idle") {
+        ignoreIncomingAudioRef.current = false;
+      }
       return;
     }
 
     if (data.type === "response_audio_chunk" && data.audio) {
+      if (ignoreIncomingAudioRef.current) {
+        return;
+      }
+
       try {
         setAudioError(null);
         setIsPlaying(true);
@@ -393,6 +445,8 @@ function Jarvis() {
     analyserRef,
     startRecording,
     stopRecording,
+    interruptConversation,
+    stopPlaybackImmediately,
     enqueueResponseAudio,
     resetConversation
   } = useLiveVoice({
@@ -470,6 +524,15 @@ function Jarvis() {
         return;
       }
 
+      if (serverStatus === "speaking" || serverStatus === "processing" || isPlaying) {
+        ignoreIncomingAudioRef.current = true;
+        setIsPlaying(false);
+        setServerStatus("idle");
+        await stopPlaybackImmediately();
+        await interruptConversation();
+        return;
+      }
+
       await startRecording();
     } catch {
       setAudioError("Impossible d'utiliser le micro ou l'audio en direct.");
@@ -478,7 +541,10 @@ function Jarvis() {
 
   const isBusy = isRecording || serverStatus === "processing" || serverStatus === "speaking";
 
-  const buttonLabel = isRecording ? "Arreter" : "Parler a Jarvis";
+  const buttonLabel =
+    isRecording || serverStatus === "processing" || serverStatus === "speaking" || isPlaying
+      ? "Arreter"
+      : "Parler a Jarvis";
 
   const liveStatusLabel = (() => {
     if (!isConnected) {
@@ -534,11 +600,11 @@ function Jarvis() {
 
       <button
         onClick={toggleRecording}
-        disabled={!isConnected || serverStatus === "processing"}
+        disabled={!isConnected}
         className={`mt-6 border rounded-full px-8 py-3 text-lg transition-colors ${
-          isRecording
+          isRecording || serverStatus === "processing" || serverStatus === "speaking" || isPlaying
             ? "bg-red-600 border-red-600 text-white"
-            : !isConnected || serverStatus === "processing"
+            : !isConnected
               ? "bg-gray-600 border-gray-600 text-white cursor-not-allowed"
               : "border-[#0A9396] text-[#0A9396] hover:bg-[#0A9396] hover:text-black"
         }`}
