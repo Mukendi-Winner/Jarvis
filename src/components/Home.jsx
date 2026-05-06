@@ -2,9 +2,6 @@ import { Link } from 'react-router-dom';
 
 function Home() {
   const assistants = [
-    { name: 'Traducteur', emoji: '🌐', type: 'traducteur' },
-    { name: 'Medecin', emoji: '⚕️', type: 'medecin' },
-    { name: 'Psychologue', emoji: '🧠', type: 'psychologue' },
     { name: 'Pote', emoji: '👋', type: 'pote' },
     { name: 'Coach', emoji: '💪', type: 'coach' },
     { name: 'Prof', emoji: '📚', type: 'prof' }
@@ -20,7 +17,7 @@ function Home() {
     >
       <h1 className="text-4xl font-bold mb-12 text-center">Choisis ton assistant</h1>
       
-      <div className="grid grid-cols-2 gap-6 w-full max-w-md">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 w-full max-w-md">
         {assistants.map((assistant, index) => (
           <Link 
             to={`/jarvis/${assistant.type}`}

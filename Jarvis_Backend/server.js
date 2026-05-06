@@ -19,6 +19,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const sessions = new Map();
+const SUPPORTED_ASSISTANT_TYPES = new Set(["pote", "coach", "prof"]);
 
 app.use(
   cors({
@@ -44,16 +45,8 @@ You are Jarvis in coach mode.
 Speak with energy, warmth, confidence, and motivating rhythm.
 Help the user move forward with practical advice.
 Keep your spoken replies concise and action-oriented.
-`
-  },
-  psychologue: {
-    voiceName: "Sulafat",
-    instruction: `
-You are Jarvis in psychologue mode.
-You are not a licensed mental health professional.
-Speak gently, calmly, and with empathy.
-Offer support, reflection, and presence without pretending to diagnose or replace therapy.
-If the user sounds in crisis, encourage immediate help from trusted people or emergency services.
+Stay focused on fitness, sport, discipline, performance, recovery, and training-related guidance.
+If the user asks about topics outside coaching, sport, or training, decline politely and steer the discussion back to coaching.
 `
   },
   pote: {
@@ -64,29 +57,14 @@ Speak like a close friend: casual, warm, playful, and natural.
 Keep answers short and lively unless the user asks for more detail.
 `
   },
-  traducteur: {
-    voiceName: "Iapetus",
-    instruction: `
-You are Jarvis in traducteur mode.
-Help with translation, reformulation, and language understanding.
-Be clear, precise, and natural in either French or English.
-`
-  },
-  medecin: {
-    voiceName: "Charon",
-    instruction: `
-You are Jarvis in medecin mode.
-You are not a real doctor and must not claim to diagnose or replace medical care.
-Provide careful general health guidance and encourage professional care when appropriate.
-If symptoms sound urgent, tell the user to seek immediate medical attention.
-`
-  },
   prof: {
     voiceName: "Sadaltager",
     instruction: `
 You are Jarvis in prof mode.
 Teach clearly and patiently.
 Make explanations easy to follow while keeping spoken replies compact unless the user requests depth.
+Stay focused on explaining, teaching, clarifying, or helping the user learn a concept or skill.
+If the user asks for something unrelated to learning or explanation, decline politely and guide the conversation back to teaching.
 `
   }
 };
@@ -121,6 +99,10 @@ function loadDotEnv() {
 }
 
 function getAssistantConfig(assistantType) {
+  if (!SUPPORTED_ASSISTANT_TYPES.has(assistantType)) {
+    assistantType = "pote";
+  }
+
   return ASSISTANT_CONFIGS[assistantType] || {
     voiceName: "Kore",
     instruction: `
@@ -167,20 +149,21 @@ ${historyContext ? `\n\n${historyContext}` : ""}
 }
 
 function getOrCreateSessionState(sessionId, assistantType) {
+  const normalizedAssistantType = SUPPORTED_ASSISTANT_TYPES.has(assistantType) ? assistantType : "pote";
   const safeSessionId = sessionId || crypto.randomUUID();
   const existing = sessions.get(safeSessionId);
 
   if (existing) {
     existing.lastSeenAt = Date.now();
-    if (assistantType && existing.assistantType !== assistantType) {
-      existing.assistantType = assistantType;
+    if (normalizedAssistantType && existing.assistantType !== normalizedAssistantType) {
+      existing.assistantType = normalizedAssistantType;
       existing.shouldReconnect = true;
     }
     return { sessionId: safeSessionId, session: existing };
   }
 
   const created = {
-    assistantType: assistantType || "default",
+    assistantType: normalizedAssistantType,
     lastSeenAt: Date.now(),
     shouldReconnect: false,
     history: []

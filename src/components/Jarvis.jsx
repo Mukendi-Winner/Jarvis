@@ -7,6 +7,7 @@ const WS_URL =
 
 const SESSION_STORAGE_PREFIX = "jarvis-session";
 const INPUT_SAMPLE_RATE = 16000;
+const SUPPORTED_ASSISTANT_TYPES = new Set(["pote", "coach", "prof"]);
 
 function downsampleTo16k(inputData, inputSampleRate) {
   if (inputSampleRate === INPUT_SAMPLE_RATE) {
@@ -391,7 +392,8 @@ function useLiveVoice({ assistantType, onMessage }) {
 }
 
 function Jarvis() {
-  const { assistantType = "default" } = useParams();
+  const { assistantType = "pote" } = useParams();
+  const resolvedAssistantType = SUPPORTED_ASSISTANT_TYPES.has(assistantType) ? assistantType : "pote";
   const [fullText, setFullText] = useState("");
   const [index, setIndex] = useState(0);
   const [scale, setScale] = useState(1);
@@ -450,7 +452,7 @@ function Jarvis() {
     enqueueResponseAudio,
     resetConversation
   } = useLiveVoice({
-    assistantType,
+    assistantType: resolvedAssistantType,
     onMessage: handleMessage
   });
 
@@ -461,16 +463,13 @@ function Jarvis() {
   useEffect(() => {
     const assistantTexts = {
       coach: `${userName ? `${userName}, ` : ""}Je suis votre coach\nPret pour votre seance ?\nQuel objectif voulez-vous attaquer ?`,
-      psychologue: `${userName ? `${userName}, ` : ""}Je suis la pour vous ecouter\nParlez-moi librement\nOn avance ensemble, a votre rythme`,
       pote: `Salut ${userName || "mon pote"} !\nQuoi de neuf aujourd'hui ?\nOn parle de ce que tu veux`,
-      traducteur: `${userName ? `Bonjour ${userName}, ` : ""}je suis votre traducteur\nJe peux vous aider en francais ou en anglais`,
-      medecin: `Dr. Jarvis\nExpliquez-moi ce que vous ressentez\nJe vous repondrai avec prudence`,
       prof: `${userName ? `${userName}, ` : ""}Professeur a votre service\nQuel sujet voulez-vous comprendre ?`
     };
 
-    setFullText(assistantTexts[assistantType] || "Bonjour, comment puis-je vous aider ?");
+    setFullText(assistantTexts[resolvedAssistantType] || "Bonjour, comment puis-je vous aider ?");
     setIndex(0);
-  }, [assistantType, userName]);
+  }, [resolvedAssistantType, userName]);
 
   useEffect(() => {
     if (index >= fullText.length) {
